@@ -128,7 +128,41 @@ psv <- ps.sd.veg
 write.csv(psv, "~/Documents/WWPS_soil_2018/fun_sd_gdm.csv")
 write.csv(ps.otu.veg, "~/Documents/WWPS_soil_2018/fun_otu_gdm.csv")
 
+```
 
-#I reduced the sample data file further using ps$var = NULL to remove col
-#psv = read.csv("~/Documents/WWPS_soil_2018/soils_data_reduced.csv")
+Now I'm going to do the same with our relative abundance data.
+
+```{r}
+# convert the sample_data() within a phyloseq object to a vegan (or GDM) compatible data object
+pssd2veg <- function(physeq) {
+  sd <- sample_data(physeq)
+  return(as(sd,"data.frame"))
+}
+
+# convert the otu_table() within a phyloseq object to a vegan (or GDM) compatible data object
+psotu2veg <- function(physeq) {
+  OTU <- otu_table(physeq)
+  if (taxa_are_rows(OTU)) {
+    OTU <- t(OTU)
+  }
+  return(as(OTU, "matrix"))
+}
+
+ps.sd.veg <-  pssd2veg(ps.P)
+ps.otu.veg <-  psotu2veg(ps.P)
+
+#Create a reduced sample data file with no categorical variables
+ps.sd.veg$SampleID = NULL
+ps.sd.veg$cluster = NULL
+ps.sd.veg$num = NULL
+ps.sd.veg$topo = NULL
+ps.sd.veg$Elevation = NULL
+ps.sd.veg$Longitude = NULL
+ps.sd.veg$Latitude = NULL
+
+#Save reduced sample data file and the OTU file for later use (like GDM)
+psv <- ps.sd.veg
+write.csv(psv, "~/Documents/WWPS_soil_2018/fun_sd_gdm_relab.csv")
+write.csv(ps.otu.veg, "~/Documents/WWPS_soil_2018/fun_otu_gdm_relab.csv")
+
 ```
