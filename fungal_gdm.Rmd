@@ -1,0 +1,116 @@
+---
+title: "fungal_gdm"
+output: html_notebook
+---
+
+This program is based off the guide by Fitzpatrik and Lisk (2016; https://cran.r-project.org/web/packages/gdm/vignettes/gdmVignette.pdf ) Generalized Dissimilarity Modeling is ued to analyze and map spatial patterns of biodiversity, specifically by relating dissimilarity in species (OTUs) to distance (either geographical or environmental distances). 
+
+#Prep working space
+Load packages and data files to use
+
+```{r}
+library(gdm)
+library(tidyverse)
+library(Hmisc)
+library(corrplot)
+
+otu <- read.csv("~/Documents/WWPS_soil_2018/fun_otu_gdm.csv")
+sd <- read.csv("~/Documents/WWPS_soil_2018/fun_sd_gdm.csv")
+
+#transform the matrix into a dataframe
+otu <- as.data.frame(otu)
+sd <- as.data.frame(sd)
+
+#The column that indicates sample site ID is named "X" by default
+```
+
+
+#Format data to use for GD modeling
+The environmental and geo data needs to be in a specific form for using the gdm package. We will also remove extractable nutrients that were lower than detection limits (As, Mo, Cd, and B).
+```{r}
+
+#Full model variables with low ext nutrients removed
+sd.full <- sd[,c(1:10,13,15:21,23:33)]
+
+#change the predData to the subset you want
+gdmTab <- formatsitepair(bioData = otu, bioFormat = 1, XColumn = "lon", YColumn = "lat", 
+                         siteColumn = "X", predData = sd.full)
+gdmTab[1:3,]
+```
+
+#GDM analysis
+GDM is a nonlinear extension of permutational matrix regression that uses flexible splines and a GLM to accommodate two types of nonlinearity common in ecological datasets: (1) variation in the rate of compositional turnover (non-stationarity) along environmental gradients, and (2) the curvilinear relationship between biological distance and environmental and geographical distance. 
+
+
+##Run a model to test for var significance and contribution to model.
+Significance testing of environmental variables will be done by a combination of Monte Carlo sampling and stepwise backward elimination as implemented in the gdm.varImp function. This is set for 250 permutations per step until only significant variables remain in the model. 
+```{r}
+all.vars <- gdm.varImp(gdmTab, geo=T, splines = NULL, knots = NULL, fullModelOnly = F, nPerm = 150, parallel = TRUE, cores = 6, sampleSites = 1, sampleSitePairs = 1, outFile = "all_GDM")
+
+```
+
+After eliminating the non-significant variables, we can then fit a GDM to the remaining data to assess the relative importance of each variable in describing patterns of beta diversity. The 11th step of the model left Geographic, pH, Sand, Al, Ca, Fe, C:N and Elevation as significant factors. 
+
+First, we need to subset for only the variables left:
+```{r}
+#Significant varibles only
+sd.sig <- sd[,c(1:4,8,10,13,18,32,33)]
+
+#change the predData to the subset you want
+gdmTab.sig <- formatsitepair(bioData = otu, bioFormat = 1, XColumn = "lon", YColumn = "lat", 
+                         siteColumn = "X", predData = sd.sig)
+gdmTab.sig[1:3,]
+
+```
+
+
+The summary function provides an overview of the model, including deviance explained and the values of the coefficients for the I-spline for each predictor variable. Variables with all coefficients=0 have no relationship with the biological pattern. 
+```{r}
+gdm.sig <- gdm(gdmTab.sig, geo=T)
+
+#summary function
+summary(gdm.sig) #NEED TO LOOK THIS OVER FOR MODEL DEVELOPMENT!!!!!
+#write_csv(gdm.nonbio, "~/Documents/WWPS_soil_2018/gdm_nonbiotrophic.csv")
+```
+[NOTE TO SELF: Need to add together coefficients to get max height of each spline. I didn't do that on the last draft of the fungal paper. I took the largest value instead. -SFS Jul 2 2019]
+
+
+#GDM plots
+We can view the fitted model and I-splines using the plot function, which creates a multi-panel plot of the fitted relationship between predicted ecological distance and observed compositional dissimilarity, and predicted versus observed biological distance, and each I-spline with at least one non-zero coefficient. 
+```{r}
+# get idea of number of panels
+length(gdm.sig$predictors)
+
+#plot all graphs
+plot(gdm.sig, plot.layout=c(2,3))
+
+#since we have so many graphs, we can extract them to see them sep
+gdm.1.splineDat <-isplineExtract(gdm.sig)
+str(gdm.1.splineDat)
+
+#plot each graph seperatly
+plot(gdm.1.splineDat$x[,"pH"], gdm.1.splineDat$y[,"pH"], lwd=3,type="l", xlab="Geographic distance", ylab="Partial ecological distance")
+
+plot(gdm.1.splineDat$x[,"per_sand"], gdm.1.splineDat$y[,"per_sand"], lwd=3,type="l", xlab="Geographic distance", ylab="Partial ecological distance")
+# + points(gdm.1.splineDat$x[,"per_sand"], gdm.1.splineDat$y[,"per_sand"], lwd=3,type="l")
+
+p = ggplot() + 
+  geom_line(aes(x = gdm.1.splineDat$x[,"pH"], y = gdm.1.splineDat$y[,"pH"]), color = "blue") +
+  geom_line(aes(x = gdm.1.splineDat$x[,"per_sand"], y = gdm.1.splineDat$y[,"per_sand"]), color = "red") +
+  xlab('Predictor Dissimilarity') +
+  ylab('Partial ecological distance')
+#Need to transform the predictor data to fit on a 0 - 1 scale (divide by max value) - that will fit on one graph
+print(p)
+
+
+
+```
+
+The maximum height of each spline indicates the magnitude of total biological change along that gradient and thereby corresponds to the relative importance of that predictor in contributing to biological turnover, while holding all other variables constant. The shape indicates how the rate of biological change varies with position along that gradient. Thus, the splines provide insight into the total magnitude of biological change as a function of each gradient and where along each gradient those changes are most pronounced. 
+
+pH, sand, Al, Fe all have more pronounced splines than the rest.
+
+
+
+
+

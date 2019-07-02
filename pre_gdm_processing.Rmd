@@ -3,10 +3,6 @@ title: "R Notebook"
 output: html_notebook
 ---
 
-#Load all required data and merge datasets
-
-
-
 ##Load required libraries
 ```{r}
 library(phyloseq)
@@ -20,39 +16,17 @@ library(grid)
 library(MASS)
 ```
 
-##Load the sample metadata
-Read in the csv file with soil data. Add in a new variable to categorize samples into "mound" and "depression" areas, based on the elevation. I matched the map created by the Corp that identified wetland and 'non-wetland' areas using different elevation cutoff points and landed on 375.3m ended up matching the best. 
-```{r}
-# meta = read.csv("~/Documents/WWPS_soil_2018/meta_norm.csv")
-
-#meta$SampleID <- paste0("WS-",meta$cluster,"-",meta$num)
-#row.names(meta) <- meta$SampleID
-
-#meta$topo <- c("mound", "depression")
-# meta$topo <- ifelse(meta$Ele <= 375.3, "depression", "mound")
-
-# write.csv(meta, "~/Documents/WWPS_soil_2018/soils_data_w2_topo.csv")
-```
-
-##Load phyloseq object created from the raw seq data
-Open the phyloseq object that contains OTUs for both fungi and bacteria. Merge the phyloseq data with the metadata. 
-
+##Load the phyloseq object
+Only select for the Kingdom Fungi for the phyloseq data
 ```{r}
 
 ps <- readRDS("~/Documents/WWPS_soil_2018/output/WWP_Full_phyloseq_object.RDS")
-
-# Add soil metadata and merge all into one phyloseq object
-# ps.m = merge_phyloseq(ps, sample_data(meta))
-
-#Add topo as a sample variable
-sample_data(ps)$topo <- ifelse(sample_data(ps)$Ele <= 375.3, "depression", "mound")
-
-#Change the Kingdom to either Fungi (k__Fungi) or Bacteria before running
 ps = subset_taxa(ps, Kingdom == "k__Fungi")
 
-
+#View the phyloseq object
 ps
 ```
+
 Everything looks good. We have a phyloseq object, which contains our OTU/taxonomic/sequence data, which has been combined with our soil metadata. The reason why we have 146 samples instead of 150 is that some of them only had a few seq counts, which ended up not being fungal (we think this happened somewhere between DNA amplification and seqencing)
 
 #Start exploring the data
@@ -71,19 +45,8 @@ p + ggtitle(title) + scale_y_log10() + facet_wrap(~type, 1, scales = "free")
 This looks pretty typical for an amplicon-based microbiome study. Thankfully, most samples have at least 100 reads. Regardless, we will use a technique to normalize the data to simulate an even "sequencing effort."
 
 
-##Determine the cutoff point for min read number
-Refied to the bottom 10% quantile of sequencing depth
-
-```{r}
-hist(sample_sums(ps))
-
-quantile(sample_sums(ps), probs = c(0, .05, .10, .2, .25, .3, .35, .4, .50, 1))
-```
-
-
-
-##Normalization by rarefying sample count
-First, I'll remove the samples that have below 100 counts. 
+#Normalization by rarefying sample count
+First, I'll remove the samples that have below 1000 counts. 
 ```{r}
 #Can change the arbitrary cutoff read number
 ps.sub = prune_samples(sample_sums(ps) > 1000, ps)
@@ -113,153 +76,33 @@ ps.R <- rarefy_even_depth(ps.prune, sample.size = 1000)
 
 Randomizing at this level has caused us to loose over 1,500 OTUs from our complete data set. This is a good place to introduce an alternative method for normalizing sample depth.
 
+#Normalizing counts by using relative abundances
 Traditionally, samples would be rarefied using random sub-sampling down to the lowest common sample size acceptable. However, there are issues with this approach (See https://www.frontiersin.org/articles/10.3389/fmicb.2017.02224/full#F2 and https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1003531). Mixed models can be difficult to work with when developing diversity indexes as well. Thus, I will be using a simple transformation wich will change OTU counts into relative abundances, we can check both of these in the later analyses. 
 ```{r}
 #In the following function, I use 100 as the sample count so it is comparable to our rarefied data set
-ps.P <- transform_sample_counts(ps.prune, function(x) 1000 * x / sum(x))
+ps.P <- transform_sample_counts(ps, function(x) 1000 * x / sum(x))
 ```
 
 Let's now check both of our normalized data sets, to make sure the reads look the way they should.
 ```{r}
 par(mfrow = c(1,2))
-title = "Sum of reads for each sample, ps.R"
-plot(sort(sample_sums(ps.R), TRUE), type = "h", main = title, ylab = "reads",
-     ylim = c(0,1500))
 title = "Sum of reads for each sample, ps.P"
 plot(sort(sample_sums(ps.P), TRUE), type = "h", main = title, ylab = "reads",
      ylim = c(0,1500))
 ```
 Everything has been normalized the way we want it to. 
 
-#Data exploration
-
-##PCoA Graph
-One of the best and easiest ways to explore amplicon data is by using uncronstrained ordinations. The following will run a PCoA on the data using bray dissimilarity. 
-```{r}
-ps.pcoa <- ordinate(
-  physeq = ps.R,
-  method = "PCoA",
-  distance = "bray"
-)
-
-plot_ordination(
-  physeq = ps.R,
-  ordination = ps.pcoa,
-  color = "Ele",
-  #shape = "topo",
-  title = "PCoA of WWPS Fungal Communities"
-) +
-  scale_color_gradient(low = "blue", high = "yellow") +
-  geom_point(aes(color = Ele), alpha = 0.7, size = 4) +
-  geom_point(colour = "grey90", size = 1.5) 
-```
-
-Next, we can look at measurements of diversity between mound and depressions by plotting indexes for each:
-```{r}
-plot_richness(ps.R, x = "topo", color = "per_clay", title = "Diversity of ps.R") + geom_boxplot()
-```
-
-#Investigating topography as an explainatory element
-Need to subset the data by the top 10 and bottom 10 elevations. 
-
-```{r}
-
-ps.topo <- subset_samples(ps.R, Ele >= 375.370  | Ele <= 375.0650)
-plot_richness(ps.topo, x = "topo", color = "per_clay", title = "Diversity of ps.R") + geom_boxplot()
-
-#Transform to percentages
-ps.topo = merge_samples(ps.topo, "topo")
-
-#Repair merged values associated with each feature after merge
-sample_data(ps.topo)$topo <- levels(sample_data(ps.topo)$topo)
-
-#transform samples counts to percentages
-ps.topo = transform_sample_counts(ps.topo, function(x) x/100)
-
-#We need to simplify this by only representing the top 50 OTUs
-top50otus = names(sort(taxa_sums(ps.topo), TRUE)[1:50])
-taxtab50 = cbind(tax_table(ps.topo), genus50 = NA)
-taxtab50[top50otus, "genus50"] <- as(tax_table(ps.topo)[top50otus, "Genus"], "character")
-tax_table(ps.topo) <- tax_table(taxtab50)
-
-
-plot_bar(ps.topo, x = "topo", fill = "genus50") + coord_flip()
-
-
-#Prune taxa to only the top 50 to show on bargraph
-ps.topo50 = prune_taxa(top50otus, ps.topo)
-
-
-plot_bar(ps.topo50, x = "topo", fill = "genus50") + coord_flip() +
-  ylab("Percentage of Sequences") + xlab("Topography") + ylim(0,100) + scale_fill_discrete(name="Genus")
-                                                                                           
-                                                                                           
-# breaks=c("Archaeorhizomyces", "Arnium", "Cercophora", "Chaetomella", "Clavaria", "Codinaea", "Didymella", "Emericellopsis", "Penicillum", "Plectosphaerella", "Pyrenochaetopsis", "Staphyiotrichum", "NA"))
-
-#Estimate richness of all samples
-ps.topo.rich <- estimate_richness(ps.topo)
-#Load CSV file with richness data
-rich = read.csv("~/Documents/Pubs in Progress/Fungal Soil Survey/richness_data.csv")
-
-ggplot(rich, aes(x=topo, y=Shannon)) +
-  geom_boxplot()
-
-t.test(rich$Shannon~rich$topo)
-t.test(rich$Chao1~rich$topo)
-t.test(rich$se.chao1~rich$topo)
-t.test(rich$Simpson~rich$topo)
-t.test(rich$Fisher~rich$topo)
-t.test(rich$InvSimpson~rich$topo)
-
-
-
-
-
-
-```
-
-#Now to look at soil properties between those two same topographical positions.
-
-```{r}
-
-
-ggplot(sample_data(ps.topo), aes(x=topo, y=Ele)) +
-  geom_boxplot()
-
-# All the t-tests, base R style
-data.topo <- sample_data(ps.topo)
-
-t.test(data.topo$Ele~data.topo$topo)
-
-
-
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-#Environmental interpretation
-It can be possible to 'explain' ordination using corresponding environmental measurements for each sample. We can explore these in the PCoA by changing the symbols according to the environmental variables, but we can also fit environmental vectors onto the ordination in the form of arrows. 
-
+#Transform phyloseq data to make it compatable to downstream analyses
 To continue, I need to make the phyloseq object compatable with a package named "vegan", which has many functions related to studying diversity and community structure. I'll use some codes from https://jacobrprice.github.io/2017/08/26/phyloseq-to-vegan-and-back.html for this. 
 
 ```{r}
-# convert the sample_data() within a phyloseq object to a vegan compatible data object
+# convert the sample_data() within a phyloseq object to a vegan (or GDM) compatible data object
 pssd2veg <- function(physeq) {
   sd <- sample_data(physeq)
   return(as(sd,"data.frame"))
 }
 
-# convert the otu_table() within a phyloseq object to a vegan compatible data object
+# convert the otu_table() within a phyloseq object to a vegan (or GDM) compatible data object
 psotu2veg <- function(physeq) {
   OTU <- otu_table(physeq)
   if (taxa_are_rows(OTU)) {
@@ -288,44 +131,4 @@ write.csv(ps.otu.veg, "~/Documents/WWPS_soil_2018/fun_otu_gdm.csv")
 
 #I reduced the sample data file further using ps$var = NULL to remove col
 #psv = read.csv("~/Documents/WWPS_soil_2018/soils_data_reduced.csv")
-```
-
-Now we need to calculate the Bray-Curtis dissimilarity for the otu table we will use in the vegan package
-```{r}
-vare.dis <- vegdist(ps.otu.veg)
-vare.mds0 <- isoMDS(vare.dis)
-```
-
-Calculate the NMDS for the data set
-```{r}
-library(MASS)
-vare.mds <- metaMDS(ps.otu.veg, k=3, trymax = 1000,  trace = FALSE)
-vare.mds
-
-stressplot(vare.mds)
-```
-
-#Fitting environmental vectors to the previous NMDS result. 
-```{r}
-ef <- envfit(vare.mds, psv, permu = 999)
-ef
-```
-The first two columns give direction cosines of the vectors, andr2givesthe squared correlation coefficient.
-
-Now to plot them as fitted vectors to the ordination map. I'll limit the plotting to the most significant variables with the argument p.max. 
-```{r}
-plot(vare.mds, display = "sites")
-plot(ef, p.max = 0.001)
-
-```
-
-#Surface fitting
-Fit surfaces of environmental variables to ordinations. This helps when the response is not actually linear. If it is linear and vectors are appropriate, the fitted surface is a plane whose gradient is parallel to the arrow and the fitted contours are equally spaced parallel lines perpendicular to the arrow. 
-```{r}
-ef <- envfit(vare.mds ~ per_sand + Fe, psv)
-plot(vare.mds, display = "sites")
-plot(ef)
-tmp <- with(psv, ordisurf(vare.mds, per_sand, add = TRUE))
-with(psv, ordisurf(vare.mds, Fe, add = TRUE, col = "green4"))
-
 ```
